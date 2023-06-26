@@ -91,6 +91,9 @@ int8_t Controller::ReadStick(int32_t portIndex, Stick stick, Axis axis) {
 }
 
 void Controller::ProcessStick(int8_t& x, int8_t& y, float deadzoneX, float deadzoneY, int32_t notchProxmityThreshold) {
+    auto maxRadiusOuterDeadzone = 2.0 / sqrt(2.0) * (MAX_DIAGONAL / MAX_AXIS_RANGE * (MAX_AXIS_RANGE - deadzoneX) + deadzoneX);
+    x *= maxRadiusOuterDeadzone;
+    y *= maxRadiusOuterDeadzone;
     auto ux = fabs(x);
     auto uy = fabs(y);
 
@@ -99,29 +102,44 @@ void Controller::ProcessStick(int8_t& x, int8_t& y, float deadzoneX, float deadz
         SPDLOG_TRACE("Invalid Deadzone configured. Up/Down was {} and Left/Right is {}", deadzoneY, deadzoneX);
     }
 
-    // create scaled circular dead-zone in range {-15 ... +15}
+    // create outer circular dead-zone and scale linearly with respect to an inner axial deadzone
     auto len = sqrt(ux * ux + uy * uy);
-    if (len < deadzoneX) {
-        len = 0;
-    } else if (len > MAX_AXIS_RANGE) {
-        len = MAX_AXIS_RANGE / len;
+    if (len <= maxRadiusOuterDeadzone) {
+        auto lenX = ux;
+        auto lenY = uy;
+        if (lenX <= deadzoneX) {
+            lenX = 0.0;
+        } else {
+            lenX = (lenX - deadzoneX) * MAX_AXIS_RANGE / (MAX_AXIS_RANGE - deadzoneX) / lenX;
+        }
+        ux *= lenX;
+        if (lenY <= deadzoneX) {
+            lenY = 0.0;
+        } else {
+            lenY = (lenY - deadzoneX) * MAX_AXIS_RANGE / (MAX_AXIS_RANGE - deadzoneX) / lenY;
+        }
+        uy *= lenY;
     } else {
-        len = (len - deadzoneX) * MAX_AXIS_RANGE / (MAX_AXIS_RANGE - deadzoneX) / len;
+        len = maxRadiusOuterDeadzone / len;
+        ux *= len;
+        uy *= len;
     }
-    ux *= len;
-    uy *= len;
 
-    // bound diagonals to an octagonal range {-68 ... +68}
+    // bound diagonals to an octagonal range {-69 ... +69}
     if (ux != 0.0 && uy != 0.0) {
         auto slope = uy / ux;
-        auto edgex = copysign(MAX_AXIS_RANGE / (fabs(slope) + 16.0 / 69.0), ux);
-        auto edgey = copysign(std::min(fabs(edgex * slope), MAX_AXIS_RANGE / (1.0 / fabs(slope) + 16.0 / 69.0)), y);
+        auto edgex = copysign(MAX_AXIS_RANGE / (fabs(slope) + (MAX_AXIS_RANGE - MAX_DIAGONAL) / MAX_DIAGONAL), ux);
+        auto edgey = copysign(std::min(fabs(edgex * slope), MAX_AXIS_RANGE / (1.0 / fabs(slope) + (MAX_AXIS_RANGE - MAX_DIAGONAL) / MAX_DIAGONAL)), uy);
         edgex = edgey / slope;
 
-        auto scale = sqrt(edgex * edgex + edgey * edgey) / MAX_AXIS_RANGE;
+        auto scale = sqrt(edgex * edgex + edgey * edgey) / maxRadiusOuterDeadzone;
         ux *= scale;
         uy *= scale;
     }
+
+    // do not exceed MAX_AXIS_RANGE
+    if (ux > MAX_AXIS_RANGE) ux = MAX_AXIS_RANGE;
+    if (uy > MAX_AXIS_RANGE) uy = MAX_AXIS_RANGE;
 
     // map to virtual notches
     const double notchProximityValRadians = notchProxmityThreshold * M_TAU / 360;
@@ -134,6 +152,10 @@ void Controller::ProcessStick(int8_t& x, int8_t& y, float deadzoneX, float deadz
         ux = cos(newAngle) * distance * MAX_AXIS_RANGE;
         uy = sin(newAngle) * distance * MAX_AXIS_RANGE;
     }
+
+    // epsilon to overcome floating point precision loss
+    ux = ux + 1e-09;
+    uy = uy + 1e-09;
 
     // assign back to original sign
     x = copysign(ux, x);
