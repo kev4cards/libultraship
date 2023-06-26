@@ -12,6 +12,7 @@
 #define EXTENDED_SCANCODE_BIT (1 << 8)
 #define AXIS_SCANCODE_BIT (1 << 9)
 #define MAX_AXIS_RANGE 85.0f
+#define MAX_DIAGONAL 69.0f
 
 namespace LUS {
 enum GyroData { DRIFT_X, DRIFT_Y, GYRO_SENSITIVITY };
