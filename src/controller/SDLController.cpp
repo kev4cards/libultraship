@@ -66,9 +66,12 @@ void SDLController::NormalizeStickAxis(SDL_GameControllerAxis axisX, SDL_GameCon
     const auto axisValueX = SDL_GameControllerGetAxis(mController, axisX);
     const auto axisValueY = SDL_GameControllerGetAxis(mController, axisY);
 
-    // scale {-32768 ... +32767} to {-MAX_AXIS_RANGE ... +MAX_AXIS_RANGE}
-    auto ax = axisValueX * MAX_AXIS_RANGE / MAX_SDL_RANGE;
-    auto ay = axisValueY * MAX_AXIS_RANGE / MAX_SDL_RANGE;
+    if (axisValueX < -32767.0) axisValueX = -32767.0;
+    if (axisValueY < -32767.0) axisValueY = -32767.0;
+
+    // scale {-32767 ... +32767} to {-1 ... +1}
+    auto ax = axisValueX / MAX_SDL_RANGE;
+    auto ay = axisValueY / MAX_SDL_RANGE;
 
     if (axisX == SDL_CONTROLLER_AXIS_LEFTX) {
         GetLeftStickX(portIndex) = +ax;
