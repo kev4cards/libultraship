@@ -9,7 +9,7 @@
 #define strdup _strdup
 #endif
 
-#define MAX_SDL_RANGE (float)INT16_MAX
+#define MAX_SDL_RANGE (double)INT16_MAX
 
 // NOLINTNEXTLINE
 auto format_as(SDL_GameControllerAxis a) {
@@ -62,13 +62,18 @@ bool SDLController::Close() {
     return true;
 }
 
+double SDLController::NormaliseStickValue(double axisValue) {
+    // scale {-32767.0 ... +32767.0} to {-1.0 ... +1.0}
+    if (axisValue < -32767.0) axisValue = -32767.0;
+    return axisValue / MAX_SDL_RANGE;
+}
+
 void SDLController::NormalizeStickAxis(SDL_GameControllerAxis axisX, SDL_GameControllerAxis axisY, int32_t portIndex) {
     const auto axisValueX = SDL_GameControllerGetAxis(mController, axisX);
     const auto axisValueY = SDL_GameControllerGetAxis(mController, axisY);
 
-    // scale {-32768 ... +32767} to {-MAX_AXIS_RANGE ... +MAX_AXIS_RANGE}
-    auto ax = axisValueX * MAX_AXIS_RANGE / MAX_SDL_RANGE;
-    auto ay = axisValueY * MAX_AXIS_RANGE / MAX_SDL_RANGE;
+    auto ax = NormaliseStickValue(axisValueX);
+    auto ay = NormaliseStickValue(axisValueY);
 
     if (axisX == SDL_CONTROLLER_AXIS_LEFTX) {
         GetLeftStickX(portIndex) = +ax;
@@ -158,8 +163,6 @@ void SDLController::ReadDevice(int32_t portIndex) {
         if (profile->Mappings.contains(i)) {
             if (SDL_GameControllerGetButton(mController, static_cast<SDL_GameControllerButton>(i))) {
                 GetPressedButtons(portIndex) |= profile->Mappings[i];
-            } else {
-                GetPressedButtons(portIndex) &= ~profile->Mappings[i];
             }
         }
     }
@@ -175,6 +178,7 @@ void SDLController::ReadDevice(int32_t portIndex) {
         const auto posScancode = i | AXIS_SCANCODE_BIT;
         const auto negScancode = -posScancode;
         const auto axisMinimumPress = profile->AxisMinimumPress[i];
+        const auto axisDeadzone = profile->AxisDeadzones[i];
         const auto posButton = profile->Mappings[posScancode];
         const auto negButton = profile->Mappings[negScancode];
         const auto axisValue = SDL_GameControllerGetAxis(mController, axis);
@@ -198,10 +202,18 @@ void SDLController::ReadDevice(int32_t portIndex) {
               negButton == BTN_VSTICKDOWN)) {
 
             // The axis is being treated as a "button"
-            if (axisValue > axisMinimumPress) {
+
+            auto axisComparableValue = axisValue;
+            auto axisMinValue = axisMinimumPress;
+            if (profile->UseStickDeadzoneForButtons) {
+                axisComparableValue = NormaliseStickValue(axisValue);
+                axisMinValue = axisDeadzone;
+            }
+
+            if (axisComparableValue > axisMinValue) {
                 GetPressedButtons(portIndex) |= posButton;
                 GetPressedButtons(portIndex) &= ~negButton;
-            } else if (axisValue < -axisMinimumPress) {
+            } else if (axisComparableValue < -axisMinValue) {
                 GetPressedButtons(portIndex) &= ~posButton;
                 GetPressedButtons(portIndex) |= negButton;
             } else {
@@ -375,7 +387,7 @@ void SDLController::CreateDefaultBinding(int32_t portIndex) {
     profile->Mappings[SDL_CONTROLLER_BUTTON_RIGHTSTICK] = BTN_MODIFIER2;
 
     for (int32_t i = SDL_CONTROLLER_AXIS_LEFTX; i < SDL_CONTROLLER_AXIS_MAX; i++) {
-        profile->AxisDeadzones[i] = 16.0f;
+        profile->AxisDeadzones[i] = 7.0;
         profile->AxisMinimumPress[i] = 7680.0f;
     }
 
