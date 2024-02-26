@@ -49,10 +49,10 @@ void KeyboardController::ReleaseAllButtons() {
 }
 
 void KeyboardController::ReadDevice(int32_t portIndex) {
-    GetLeftStickX(portIndex) = 0;
-    GetLeftStickY(portIndex) = 0;
-    GetRightStickX(portIndex) = 0;
-    GetRightStickY(portIndex) = 0;
+    GetLeftStickX(portIndex) = 0.0;
+    GetLeftStickY(portIndex) = 0.0;
+    GetRightStickX(portIndex) = 0.0;
+    GetRightStickY(portIndex) = 0.0;
 }
 
 int32_t KeyboardController::ReadRawPress() {
