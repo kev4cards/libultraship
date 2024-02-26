@@ -25,16 +25,16 @@ Controller::~Controller() {
     SPDLOG_TRACE("destruct controller");
 }
 
-int8_t Controller::ReadStick(int32_t portIndex, Stick stick, Axis axis) {
+double Controller::ReadStick(int32_t portIndex, Stick stick, Axis axis) {
     switch (stick) {
         case Stick::LEFT: {
             switch (axis) {
                 case Axis::X: {
                     if (GetLeftStickX(portIndex) == 0) {
                         if (GetPressedButtons(portIndex) & BTN_STICKLEFT) {
-                            return -MAX_AXIS_RANGE;
+                            return -1.0;
                         } else if (GetPressedButtons(portIndex) & BTN_STICKRIGHT) {
-                            return MAX_AXIS_RANGE;
+                            return 1.0;
                         }
                     } else {
                         return GetLeftStickX(portIndex);
@@ -44,9 +44,9 @@ int8_t Controller::ReadStick(int32_t portIndex, Stick stick, Axis axis) {
                 case Axis::Y: {
                     if (GetLeftStickY(portIndex) == 0) {
                         if (GetPressedButtons(portIndex) & BTN_STICKDOWN) {
-                            return -MAX_AXIS_RANGE;
+                            return -1.0;
                         } else if (GetPressedButtons(portIndex) & BTN_STICKUP) {
-                            return MAX_AXIS_RANGE;
+                            return 1.0;
                         }
                     } else {
                         return GetLeftStickY(portIndex);
@@ -61,9 +61,9 @@ int8_t Controller::ReadStick(int32_t portIndex, Stick stick, Axis axis) {
                 case Axis::X: {
                     if (GetRightStickX(portIndex) == 0) {
                         if (GetPressedButtons(portIndex) & BTN_VSTICKLEFT) {
-                            return -MAX_AXIS_RANGE;
+                            return -1.0;
                         } else if (GetPressedButtons(portIndex) & BTN_VSTICKRIGHT) {
-                            return MAX_AXIS_RANGE;
+                            return 1.0;
                         }
                     } else {
                         return GetRightStickX(portIndex);
@@ -73,9 +73,9 @@ int8_t Controller::ReadStick(int32_t portIndex, Stick stick, Axis axis) {
                 case Axis::Y: {
                     if (GetRightStickY(portIndex) == 0) {
                         if (GetPressedButtons(portIndex) & BTN_VSTICKDOWN) {
-                            return -MAX_AXIS_RANGE;
+                            return -1.0;
                         } else if (GetPressedButtons(portIndex) & BTN_VSTICKUP) {
-                            return MAX_AXIS_RANGE;
+                            return 1.0;
                         }
                     } else {
                         return GetRightStickY(portIndex);
@@ -90,54 +90,95 @@ int8_t Controller::ReadStick(int32_t portIndex, Stick stick, Axis axis) {
     return 0;
 }
 
-void Controller::ProcessStick(int8_t& x, int8_t& y, float deadzoneX, float deadzoneY, int32_t notchProxmityThreshold) {
-    auto ux = fabs(x);
-    auto uy = fabs(y);
+void Controller::ProcessStick(double& x, double& y, double deadzoneX, double deadzoneY, int32_t notchProxmityThreshold) {
+    const double maxRadiusOuterDeadzone = sqrt(2.0) * (MAX_DIAGONAL / MAX_AXIS_RANGE * (MAX_AXIS_RANGE - deadzoneX) + deadzoneX);
+    //printf("maxRadiusOuterDeadzone: %2.15f \n", maxRadiusOuterDeadzone); //full precision but inexact
+    //printf("deadzoneX: %2.15f \n", deadzoneX); //looks okay with keyboard's 0.0
+    //printf("x initial: %2.15f\t", x);
+    //printf("y initial: %2.15f\n", y);
+    auto ux = x * maxRadiusOuterDeadzone;
+    auto uy = y * maxRadiusOuterDeadzone;
+    //printf("ux initial: %2.15f\t", ux);
+    //printf("uy initial: %2.15f\n", uy);
 
     // TODO: handle deadzones separately for X and Y
     if (deadzoneX != deadzoneY) {
         SPDLOG_TRACE("Invalid Deadzone configured. Up/Down was {} and Left/Right is {}", deadzoneY, deadzoneX);
     }
 
-    // create scaled circular dead-zone in range {-15 ... +15}
-    auto len = sqrt(ux * ux + uy * uy);
-    if (len < deadzoneX) {
-        len = 0;
-    } else if (len > MAX_AXIS_RANGE) {
-        len = MAX_AXIS_RANGE / len;
+    // create outer circular dead-zone and scale linearly with respect to an inner axial deadzone
+    auto len = hypot(ux, uy);
+    if (len <= maxRadiusOuterDeadzone) {
+        auto lenX = fabs(ux);
+        auto lenY = fabs(uy);
+        if (lenX <= deadzoneX) {
+            lenX = 0.0;
+        } else {
+            lenX = (lenX - deadzoneX) * MAX_AXIS_RANGE / (MAX_AXIS_RANGE - deadzoneX) / lenX;
+        }
+        ux *= lenX;
+        if (lenY <= deadzoneX) {
+            lenY = 0.0;
+        } else {
+            lenY = (lenY - deadzoneX) * MAX_AXIS_RANGE / (MAX_AXIS_RANGE - deadzoneX) / lenY;
+        }
+        uy *= lenY;
     } else {
-        len = (len - deadzoneX) * MAX_AXIS_RANGE / (MAX_AXIS_RANGE - deadzoneX) / len;
+        len = maxRadiusOuterDeadzone / len;
+        ux *= len;
+        uy *= len;
     }
-    ux *= len;
-    uy *= len;
-
-    // bound diagonals to an octagonal range {-68 ... +68}
-    if (ux != 0.0 && uy != 0.0) {
-        auto slope = uy / ux;
-        auto edgex = copysign(MAX_AXIS_RANGE / (fabs(slope) + 16.0 / 69.0), ux);
-        auto edgey = copysign(std::min(fabs(edgex * slope), MAX_AXIS_RANGE / (1.0 / fabs(slope) + 16.0 / 69.0)), y);
-        edgex = edgey / slope;
-
-        auto scale = sqrt(edgex * edgex + edgey * edgey) / MAX_AXIS_RANGE;
-        ux *= scale;
-        uy *= scale;
-    }
+    //printf("ux post-scale: %2.15f\t", ux);
+    //printf("uy post-scale: %2.15f\n", uy);
 
     // map to virtual notches
-    const double notchProximityValRadians = notchProxmityThreshold * M_TAU / 360;
+    const double notchProximityValRadians = notchProxmityThreshold * M_TAU / 360.0;
 
-    const double distance = std::sqrt((ux * ux) + (uy * uy)) / MAX_AXIS_RANGE;
+    const double distance = std::sqrt((ux * ux) + (uy * uy)) / maxRadiusOuterDeadzone;
     if (distance >= MINIMUM_RADIUS_TO_MAP_NOTCH) {
         auto angle = atan2(uy, ux) + M_TAU;
         auto newAngle = GetClosestNotch(angle, notchProximityValRadians);
 
-        ux = cos(newAngle) * distance * MAX_AXIS_RANGE;
-        uy = sin(newAngle) * distance * MAX_AXIS_RANGE;
+        ux = cos(newAngle) * distance * maxRadiusOuterDeadzone;
+        uy = sin(newAngle) * distance * maxRadiusOuterDeadzone;
     }
+    //printf("ux post-notch: %2.15f\t", ux);
+    //printf("uy post-notch: %2.15f\n", uy);
+
+    // bound diagonals to an octagonal range {-MAX_DIAGONAL ... +MAX_DIAGONAL}
+    if (ux != 0.0 && uy != 0.0) {
+        auto slope = uy / ux;
+        auto edgex = copysign(MAX_AXIS_RANGE / (fabs(slope) + (MAX_AXIS_RANGE - MAX_DIAGONAL) / MAX_DIAGONAL), ux);
+        auto edgey = copysign(std::min(fabs(edgex * slope), MAX_AXIS_RANGE / (1.0 / fabs(slope) + (MAX_AXIS_RANGE - MAX_DIAGONAL) / MAX_DIAGONAL)), uy);
+        edgex = edgey / slope;
+
+        auto lengthCurrent = hypot (ux, uy);
+        auto distanceEdge = hypot (edgex, edgey);
+        if (lengthCurrent > distanceEdge) {
+            ux = edgex;
+            uy = edgey;
+        }
+    }
+    //printf("ux post-octagon: %2.15f\t", ux);
+    //printf("uy post-octagon: %2.15f\n", uy);
+
+    // do not exceed MAX_AXIS_RANGE
+    if (fabs(ux) > MAX_AXIS_RANGE) ux = copysign(MAX_AXIS_RANGE, ux);
+    if (fabs(uy) > MAX_AXIS_RANGE) uy = copysign(MAX_AXIS_RANGE, uy);
+    //printf("ux post-clamp: %2.15f\t", ux);
+    //printf("uy post-clamp: %2.15f\n", uy);
+
+    // counteract possible inexact result produced by maxRadiusOuterDeadzone with an epsilon
+    ux = copysign(fabs(ux) + 1e-09, ux);
+    uy = copysign(fabs(uy) + 1e-09, uy);
+    //printf("ux post-epsilon: %2.15f\t", ux);
+    //printf("uy post-epsilon: %2.15f\n", uy);
 
     // assign back to original sign
-    x = copysign(ux, x);
-    y = copysign(uy, y);
+    x = ux;
+    y = uy;
+    //printf ("x final: %2.15f\t", x);
+    //printf ("y final: %2.15f\n", y);
 }
 
 void Controller::ReadToPad(OSContPad* pad, int32_t portIndex) {
@@ -153,10 +194,10 @@ void Controller::ReadToPad(OSContPad* pad, int32_t portIndex) {
     padToBuffer.button |= GetPressedButtons(portIndex) & 0xFFFF;
 
     // Stick Inputs
-    int8_t leftStickX = ReadStick(portIndex, LEFT, X);
-    int8_t leftStickY = ReadStick(portIndex, LEFT, Y);
-    int8_t rightStickX = ReadStick(portIndex, RIGHT, X);
-    int8_t rightStickY = ReadStick(portIndex, RIGHT, Y);
+    double leftStickX = ReadStick(portIndex, LEFT, X);
+    double leftStickY = ReadStick(portIndex, LEFT, Y);
+    double rightStickX = ReadStick(portIndex, RIGHT, X);
+    double rightStickY = ReadStick(portIndex, RIGHT, Y);
 
     auto profile = GetProfile(portIndex);
     ProcessStick(leftStickX, leftStickY, profile->AxisDeadzones[0], profile->AxisDeadzones[1],
@@ -172,6 +213,8 @@ void Controller::ReadToPad(OSContPad* pad, int32_t portIndex) {
     padToBuffer.stick_y = leftStickY;
     padToBuffer.right_stick_x = rightStickX;
     padToBuffer.right_stick_y = rightStickY;
+    //printf("stick_x: %d\t", padToBuffer.stick_x);
+    //printf("stick_y: %d\n\n", padToBuffer.stick_y);
 
     // Gyro
     padToBuffer.gyro_x = GetGyroX(portIndex);
@@ -211,19 +254,19 @@ void Controller::SetButtonMapping(int32_t portIndex, int32_t deviceButtonId, int
     GetProfile(portIndex)->Mappings[deviceButtonId] = n64bitmask;
 }
 
-int8_t& Controller::GetLeftStickX(int32_t portIndex) {
+double& Controller::GetLeftStickX(int32_t portIndex) {
     return mButtonData[portIndex]->LeftStickX;
 }
 
-int8_t& Controller::GetLeftStickY(int32_t portIndex) {
+double& Controller::GetLeftStickY(int32_t portIndex) {
     return mButtonData[portIndex]->LeftStickY;
 }
 
-int8_t& Controller::GetRightStickX(int32_t portIndex) {
+double& Controller::GetRightStickX(int32_t portIndex) {
     return mButtonData[portIndex]->RightStickX;
 }
 
-int8_t& Controller::GetRightStickY(int32_t portIndex) {
+double& Controller::GetRightStickY(int32_t portIndex) {
     return mButtonData[portIndex]->RightStickY;
 }
 
@@ -260,9 +303,9 @@ std::string Controller::GetControllerName() {
 }
 
 double Controller::GetClosestNotch(double angle, double approximationThreshold) {
-    constexpr auto octagonAngle = M_TAU / 8;
+    constexpr auto octagonAngle = M_TAU / 8.0;
     const auto closestNotch = std::round(angle / octagonAngle) * octagonAngle;
     const auto distanceToNotch = std::abs(fmod(closestNotch - angle + M_PI, M_TAU) - M_PI);
-    return distanceToNotch < approximationThreshold / 2 ? closestNotch : angle;
+    return distanceToNotch < approximationThreshold / 2.0 ? closestNotch : angle;
 }
 } // namespace LUS
